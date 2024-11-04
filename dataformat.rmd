@@ -1,0 +1,41 @@
+```{r}
+library(tidyverse)
+
+# Initialize an empty data frame to store the average x values
+average_x_values = data.frame(playId = integer(), avg_x = numeric())
+
+# Loop through each tracking file to calculate average "x" per playId
+for (week in 1:9) {
+  # Generate the file name
+  file_name = paste0("data/tracking_week_", week, ".csv")
+  
+  # Load the tracking data for the current week
+  tracking_data = read.csv(file_name)
+  
+  # Calculate the average "x" for each playId in the current file
+  weekly_avg_x = tracking_data %>%
+    group_by(playId) %>%
+    summarize(avg_x = mean(x, na.rm = TRUE))
+  
+  # Append the weekly averages to the main data frame
+  average_x_values = bind_rows(average_x_values, weekly_avg_x)
+}
+
+final_avg_x = average_x_values %>%
+  group_by(playId) %>%
+  summarize(avg_x = mean(avg_x, na.rm = TRUE))
+
+# Load the tackles.csv file
+tackles_data = read.csv("data/tackles.csv")
+
+# Merge the average "x" values with tackles.csv based on playId
+updated_tackles = tackles_data %>%
+  left_join(final_avg_x, by = "playId")
+
+# Save the updated tackles.csv file with the new average x values
+write.csv(updated_tackles, "data/tackles_with_avg_x.csv", row.names = FALSE)
+
+# Display message upon successful completion
+cat("Updated tackles.csv with average x values saved as tackles_with_avg_x.csv\n")
+```
+
