@@ -1,10 +1,7 @@
 ```{r}
 library(tidyverse)
 
-# Initialize an empty data frame to store the average x values
-average_x_values = data.frame(playId = integer(), avg_x = numeric())
-
-# Loop through each tracking file to calculate average "x" per playId
+# Loop through each tracking file to capture tackle positions
 for (week in 1:9) {
   # Generate the file name
   file_name = paste0("data/tracking_week_", week, ".csv")
@@ -12,65 +9,31 @@ for (week in 1:9) {
   # Load the tracking data for the current week
   tracking_data = read.csv(file_name)
   
-  # Calculate the average "x" for each playId in the current file
-  weekly_avg_x = tracking_data %>%
-    group_by(playId) %>%
-    summarize(avg_x = mean(x, na.rm = TRUE))
-  
-  # Append the weekly averages to the main data frame
-  average_x_values = bind_rows(average_x_values, weekly_avg_x)
+  # Filter for rows where event is "tackle" and select playId, x, and y
+  tackles_week = tracking_data %>%
+    filter(event == "tackle") 
+  # Append the tackle positions for the current week to the main data frame
+  tackle_positions = bind_rows(tackle_positions, tackles_week)
 }
-
-final_avg_x = average_x_values %>%
-  group_by(playId) %>%
-  summarize(avg_x = mean(avg_x, na.rm = TRUE))
 
 # Load the tackles.csv file
 tackles_data = read.csv("data/tackles.csv")
 
-# Merge the average "x" values with tackles.csv based on playId
+# Merge the tackle x and y positions with tackles.csv based on playId
 updated_tackles = tackles_data %>%
-  left_join(final_avg_x, by = "playId")
+  left_join(tackle_positions, by = c("gameId", "playId", "nflId"))
 
-# Save the updated tackles.csv file with the new average x values
-write.csv(updated_tackles, "data/tackles_with_avg_x.csv", row.names = FALSE)
+plays_data = read.csv("data/plays.csv") 
+game_data = read.csv("data/games.csv") 
 
-# Display message upon successful completion
-cat("Updated tackles.csv with average x values saved as tackles_with_avg_x.csv\n")
+working_data = updated_tackles %>% left_join(plays_data, by=c("gameId", "playId")) %>% left_join(game_data, by="gameId")  %>% distinct() 
+
+# Save the updated tackles.csv file with the tackle x and y values
+write.csv(working_data, "data/working_data.csv", row.names = FALSE)
+
 ```
 
-```{r}
-# Initialize an empty data frame to store the average y values
-average_y_values = data.frame(playId = integer(), avg_y = numeric())
 
-# Loop through each tracking file to calculate average "y" per playId
-for (week in 1:9) {
-  # Generate the file name
-  file_name = paste0("data/tracking_week_", week, ".csv")
-  
-  # Load the tracking data for the current week
-  tracking_data = read.csv(file_name)
-  
-  # Calculate the average "y" for each playId in the current file
-  weekly_avg_y = tracking_data %>%
-    group_by(playId) %>%
-    summarize(avg_y = mean(y, na.rm = TRUE))
-  
-  # Append the weekly averages to the main data frame
-  average_y_values = bind_rows(average_y_values, weekly_avg_y)
-}
 
-# Calculate the final average y for each playId across weeks
-final_avg_y = average_y_values %>%
-  group_by(playId) %>%
-  summarize(avg_y = mean(avg_y, na.rm = TRUE))
-
-# Load the tackles.csv file
-tackles_data = read.csv("data/tackles_with_avg_x.csv")
-
-# Merge the average "y" values with tackles.csv based on playId
-updated_tackles_y = tackles_data %>%
-  left_join(final_avg_y, by = "playId")
-```
 
 
