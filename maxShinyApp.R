@@ -614,8 +614,7 @@ server <- function(input, output, session) {
       total_plays = n(),
       avg_DIR = total_negative_epa / total_plays,
       .groups = "drop"
-    ) %>%
-    arrange(desc(avg_DIR))
+    )
   
   # Render Average DIR Plot
   output$avg_dir_plot <- renderPlotly({
@@ -633,6 +632,20 @@ server <- function(input, output, session) {
     
     # Convert to interactive plotly
     ggplotly(avg_dir, tooltip = c("x", "y", "fill"))
+  })
+  
+  # Render Data Table for Average DIR
+  output$avg_dir_table <- renderDT({
+    team_defensive_impact %>%
+      arrange(desc(avg_DIR)) %>%
+      datatable(
+        options = list(pageLength = 10, scrollX = TRUE),
+        rownames = FALSE,
+        caption = htmltools::tags$caption(
+          style = "caption-side: top; text-align: left; font-size: 16px;",
+          "Data Table: Average Defensive Impact Rate (DIR) by Team"
+        )
+      )
   })
   
   # Defensive Impact Rate by Team (Run vs. Pass)
@@ -673,18 +686,69 @@ server <- function(input, output, session) {
     ggplotly(run_pass_dir, tooltip = c("x", "y", "fill"))
   })
   
-  # Dynamic UI
+  # Render Data Table for Run vs. Pass DIR
+  output$run_pass_dir_table <- renderDT({
+    tackles %>%
+      inner_join(plays, by = c("gameId", "playId")) %>%
+      inner_join(pbp22 %>%
+                   mutate(gameId = as.double(old_game_id), 
+                          playId = as.double(play_id)), 
+                 by = c("gameId", "playId")) %>%
+      filter(!is.na(expectedPointsAdded), play_type != "no_play") %>%
+      mutate(
+        negative_epa = ifelse(expectedPointsAdded < 0, 1, 0)
+      ) %>%
+      group_by(defensiveTeam, play_type) %>%
+      summarize(
+        total_negative_epa = sum(negative_epa, na.rm = TRUE),
+        total_plays = n(),
+        avg_DIR = total_negative_epa / total_plays,
+        .groups = "drop"
+      ) %>%
+      mutate(defensiveTeam = factor(defensiveTeam, levels = team_defensive_impact$defensiveTeam)) %>%
+      arrange(desc(avg_DIR)) %>%
+      datatable(
+        options = list(pageLength = 10, scrollX = TRUE),
+        rownames = FALSE,
+        caption = htmltools::tags$caption(
+          style = "caption-side: top; text-align: left; font-size: 16px;",
+          "Data Table: Defensive Impact Rate (Run vs. Pass) by Team"
+        )
+      )
+  })
+  
+  # Dynamic UI with Explanatory Notes
   output$dynamic_plot_or_table <- renderUI({
     req(input$analysis_type)  # Ensure a selection is made
     
     if (input$analysis_type == "avg_dir") {
-      plotlyOutput("avg_dir_plot", height = "600px")
+      tagList(
+        tags$p(
+          "Note: The Average Defensive Impact Rate (DIR) is calculated as the percentage of plays 
+        where the defensive team contributed to a negative Expected Points Added (EPA). 
+        A higher DIR indicates a more impactful defensive performance."
+        ),
+        plotlyOutput("avg_dir_plot", height = "600px"),
+        DTOutput("avg_dir_table")
+      )
     } else if (input$analysis_type == "run_pass_dir") {
-      plotlyOutput("run_pass_dir_plot", height = "600px")
+      tagList(
+        tags$p(
+          "Note: The Defensive Impact Rate (DIR) by Play Type (Run vs. Pass) breaks down the average DIR 
+        separately for run and pass plays. It helps assess a team's defensive strength against different play types."
+        ),
+        plotlyOutput("run_pass_dir_plot", height = "600px"),
+        DTOutput("run_pass_dir_table")
+      )
     } else if (input$analysis_type == "negative_epa_rate") {
-      fluidRow(
-        column(6, plotlyOutput("negative_epa_rate_plot", height = "600px")),
-        column(6, DTOutput("negative_epa_rate_table"))
+      tagList(
+        tags$p(
+          "Note: The Negative EPA Rate by Defenders in the Box and Offensive Formation shows the success rate 
+        of plays where the defense caused a negative EPA. It highlights the relationship between defensive 
+        alignment and offensive formations."
+        ),
+        plotlyOutput("negative_epa_rate_plot", height = "600px"),
+        DTOutput("negative_epa_rate_table")
       )
     }
   })
