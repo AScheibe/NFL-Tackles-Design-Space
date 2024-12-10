@@ -1,87 +1,116 @@
 ---
-title: "newestAttempt"
+title: "maxPreprocess"
 author: "Max Lake"
 date: "2024-12-09"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r}
+library(tidyverse)
+library(here)
+library(nflreadr)
+theme_set(theme_light())
 ```
 
 ```{r}
-library(dplyr)
-library(data.table)
+games <- read_csv(here("nfl-big-data-bowl-2024", "games.csv"))
+plays <- read_csv(here("nfl-big-data-bowl-2024", "plays.csv"))
+players <- read_csv(here("nfl-big-data-bowl-2024", "players.csv"))
+tackles <- read_csv(here("nfl-big-data-bowl-2024", "tackles.csv"))
+
+tracking <- list.files(path = here("nfl-big-data-bowl-2024"), full.names = TRUE) %>% 
+  str_subset("tracking_week_") %>% 
+  map(read_csv) %>% 
+  list_rbind()
 ```
 
 ```{r}
-games <- fread("nfl-big-data-bowl-2024/games.csv")
-players <- fread("nfl-big-data-bowl-2024/players.csv")
-plays <- fread("nfl-big-data-bowl-2024/plays.csv")
-tackles <- fread("nfl-big-data-bowl-2024/tackles.csv")
-frames <- fread("nfl-big-data-bowl-2024/frames.csv")
-tracking <- lapply(1:9, function(i) fread(paste0("nfl-big-data-bowl-2024/tracking_week_", i, ".csv"))) %>%
-            bind_rows()
-```
-
-```{r}
-# Filter for relevant games
-relevant_game_ids <- c(
-  2022091112, 2022091812, 2022092512, 2022100211, 2022100900,
-  2022101602, 2022102306, 2022103012, 2022110603
-)
-
-# Preprocess tracking data
 tracking <- tracking %>%
   mutate(
+    # make all plays go from left to right
     x = ifelse(playDirection == "left", 120 - x, x),
     y = ifelse(playDirection == "left", 160 / 3 - y, y),
-    dir = ifelse(playDirection == "left", dir + 180, dir %% 360),
-    o = ifelse(playDirection == "left", o + 180, o %% 360),
+    # flip player direction and orientation
+    dir = ifelse(playDirection == "left", dir + 180, dir),
+    dir = ifelse(dir > 360, dir - 360, dir),
+    o = ifelse(playDirection == "left", o + 180, o),
+    o = ifelse(o > 360, o - 360, o),
     dir_rad = pi * (dir / 180),
+    # get orientation and direction in x and y direction
+    # NA checks are for the ball
     dir_x = ifelse(is.na(dir), NA_real_, sin(dir_rad)),
     dir_y = ifelse(is.na(dir), NA_real_, cos(dir_rad)),
+    # Get directional speed/velo
     s_x = dir_x * s,
     s_y = dir_y * s,
+    # Get directional acceleration
     a_x = dir_x * a,
     a_y = dir_y * a
   )
-
-# Process frames data to ensure unique start and end frames
-frames <- frames %>%
-  group_by(gameId, playId) %>%
-  summarise(
-    start_frame = min(start_frame, na.rm = TRUE),
-    end_frame = min(end_frame, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# Filter tracking data using frames
-tracking_filtered <- tracking %>%
-  inner_join(frames, by = c("gameId", "playId")) %>%
-  filter(frameId >= start_frame & frameId <= end_frame)
-
-# Preprocess plays and games for GB defense
-gb_games <- games %>%
-  filter(gameId %in% relevant_game_ids)
-
-gb_plays <- plays %>%
-  filter(gameId %in% relevant_game_ids, defensiveTeam == "GB") %>%
-  left_join(gb_games %>% select(gameId, week), by = "gameId")
-
-gb_tracking <- tracking_filtered %>%
-  filter(gameId %in% relevant_game_ids, playId %in% gb_plays$playId) %>%
-  left_join(players, by = "nflId") %>%
-  left_join(
-    gb_plays %>%
-      select(
-        gameId, playId, week, ballCarrierId, ballCarrierDisplayName,
-        playDescription, quarter, down, yardsToGo, possessionTeam,
-        defensiveTeam, gameClock, offenseFormation
-      ),
-    by = c("gameId", "playId")
-  ) %>%
-  rename(displayName = displayName.x)
-
 ```
 
+```{r}
+pbp22 <- load_pbp(seasons = 2022)
+```
+
+```{r}
+runs <- pbp22 %>% 
+  filter(play_type == "run") %>% 
+  distinct(gameId = as.double(old_game_id), 
+           playId = as.double(play_id))
+
+rb_bc_plays <- plays %>% 
+  left_join(select(players, nflId, position), by = c("ballCarrierId" = "nflId")) %>% 
+  filter(position == "RB") %>% 
+  select(gameId, playId, ballCarrierDisplayName, position)
+```
+
+```{r}
+end_event <- tracking %>% 
+  inner_join(runs) %>% 
+  distinct(gameId, playId, frameId, event) %>% 
+  inner_join(rb_bc_plays) %>% 
+  filter(event %in% c("fumble", "fumble_defense_recovered", "fumble_offense_recovered",
+                      "out_of_bounds", "safety", "tackle", "touchdown")) %>%
+  # count(gameId, playId, sort = TRUE)
+  # correct 1 play where there's a safety after a tackle
+  group_by(gameId, playId) %>% 
+  slice_min(frameId) %>% 
+  select(gameId, playId, end_frame = frameId)
+
+# start of play event
+start_event <- tracking %>% 
+  inner_join(runs) %>% 
+  distinct(gameId, playId, frameId, event) %>% 
+  inner_join(rb_bc_plays) %>% 
+  filter(event %in% c("ball_snap", "autoevent_ballsnap", "snap_direct")) %>% 
+  group_by(gameId, playId) %>% 
+  slice_min(frameId) %>% 
+  distinct(gameId, playId, start_frame = frameId)
+
+frames <- start_event  %>%  
+  full_join(end_event)
+```
+
+```{r}
+tracking_runs <- tracking %>% 
+  inner_join(frames) %>% 
+  filter(frameId >= start_frame, frameId <= end_frame) %>% 
+  left_join(select(players, nflId, weight)) %>% 
+  mutate(m_x = s_x * weight,
+         m_y = s_y * weight)
+```
+
+```{r}
+# Save each dataset to an RDS file
+saveRDS(games, "data/games.rds")
+saveRDS(plays, "data/plays.rds")
+saveRDS(players, "data/players.rds")
+saveRDS(tackles, "data/tackles.rds")
+saveRDS(tracking, "data/tracking.rds")
+saveRDS(tracking_runs, "data/tracking_runs.rds")
+saveRDS(frames, "data/frames.rds")
+saveRDS(pbp22, "data/pbp22.rds")
+saveRDS(runs, "data/runs.rds")
+saveRDS(rb_bc_plays, "data/rb_bc_plays.rds")
+```
