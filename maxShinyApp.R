@@ -19,34 +19,9 @@ frames <- readRDS("data/frames.rds")
 pbp22 <- readRDS("data/pbp22.rds")
 rb_bc_plays <- readRDS("data/rb_bc_plays.rds")
 runs <- readRDS("data/runs.rds")
+bar_data <- readRDS("data/precomputed_bar_data.rds")
+data_grouped <- readRDS("data/precomputed_data_grouped.rds")
 
-# Filter and group data
-data_grouped <- data %>%
-  filter(!is.na(expectedPointsAdded) & 
-           !is.na(defensiveTeam) & 
-           !is.na(defendersInTheBox) & 
-           !is.na(playId) & 
-           !is.na(gameId) & 
-           !is.na(passProbability) & 
-           !is.na(dis)) %>%
-  group_by(gameId, playId, nflId) %>%
-  summarize(
-    avg_distance = mean(dis, na.rm = TRUE),
-    avg_pass_prob = mean(passProbability, na.rm = TRUE)
-  )
-
-bar_data <- data %>%
-  filter(!is.na(expectedPointsAdded) & 
-           !is.na(defensiveTeam) & 
-           !is.na(defendersInTheBox) & 
-           !is.na(playId) & 
-           !is.na(gameId) & 
-           !is.na(passProbability) & 
-           !is.na(dis)) %>%
-  group_by(defendersInTheBox) %>%
-  summarize(
-    avg_pass_prob = mean(passProbability, na.rm = TRUE)
-  )
 
 epa_data <- data %>%
   filter(!is.na(expectedPointsAdded) & 
@@ -131,6 +106,28 @@ ui <- navbarPage(
 # Server
 server <- function(input, output, session) {
   # Smoothed line graph with filled area
+  # Example Bar Graph
+  output$barGraph <- renderPlotly({
+    p <- ggplot(bar_data, aes(x = factor(defendersInTheBox), y = avg_pass_prob)) +
+      geom_col(fill = "orange", alpha = 0.5) +
+      labs(
+        title = "Pass Probability vs Defenders in Box",
+        x = "Defenders in Box",
+        y = "Average Pass Probability"
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5),
+        text = element_text(family = "Arial", color = "#495057"),
+        plot.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14)
+      )
+    
+    ggplotly(p)
+  })
+  
+  # Example Smoothed Plot
   output$smoothedPlot <- renderPlotly({
     p <- ggplot(data_grouped, aes(x = avg_distance, y = avg_pass_prob)) +
       geom_smooth(
@@ -163,29 +160,6 @@ server <- function(input, output, session) {
     ggplotly(p, tooltip = c("x", "y"))
   })
   
-  # Bar graph for average players in box and pass probability
-  output$barGraph <- renderPlotly({
-    p <- ggplot(bar_data, aes(x = factor(defendersInTheBox), y = avg_pass_prob)) +
-      geom_col(
-        fill = "orange",
-        alpha = 0.5
-      ) +
-      labs(
-        title = "Pass Probability vs Defenders in Box",
-        x = "Defenders in Box",
-        y = "Average Pass Probability"
-      ) +
-      theme_minimal() +
-      theme(
-        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5),
-        text = element_text(family = "Arial", color = "#495057"),
-        plot.title = element_text(size = 16, face = "bold"),
-        axis.text = element_text(size = 12),
-        axis.title = element_text(size = 14)
-      )
-    
-    ggplotly(p)
-  })
   
   # EPA graph
   output$epaGraph <- renderPlotly({
@@ -533,7 +507,7 @@ server <- function(input, output, session) {
       mode = "markers",
       marker = list(size = 8, opacity = 0.8, cliponaxis = FALSE),
       color = ~color,
-      colors = c("black", "blue", "red"),
+      colors = c("brown", "blue", "red"),
       text = ~paste(
         "Name:", displayName, 
         "<br>Role:", role, 
