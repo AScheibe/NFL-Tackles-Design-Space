@@ -112,17 +112,23 @@ ui <- navbarPage(
     )
   ),
   tabPanel(
-    "Negative EPA",
+    "Further Analysis with EPA",
     sidebarLayout(
       sidebarPanel(
-        helpText("Compare the negative EPA rates for teams.")
+        helpText("Select the analysis to view:"),
+        selectInput(
+          inputId = "analysis_type",
+          label = "Choose Analysis Type:",
+          choices = c(
+            "Average DIR by Team" = "avg_dir",
+            "Defensive Impact Rate by Team (Run vs. Pass)" = "run_pass_dir",
+            "Negative EPA Rate (Faceted by Formation)" = "negative_epa_rate"
+          ),
+          selected = "avg_dir"
+        )
       ),
       mainPanel(
-        h3("Negative EPA Rate (Faceted by Offensive Formation)"),
-        plotlyOutput("negative_epa_rate_plot", height = "800px"),  # Render faceted plotly chart
-        br(),
-        h3("Negative EPA Rate Data"),
-        DTOutput("negative_epa_rate_table")  # Data table output
+        uiOutput("dynamic_plot_or_table")  # Conditional rendering output
       )
     )
   )
@@ -589,6 +595,98 @@ server <- function(input, output, session) {
         "Offensive Formation" = offenseFormation,
         "Number of Defenders in the Box" = defendersInTheBox
       )
+  })
+  
+  # Calculate Average DIR by Team
+  team_defensive_impact <- tackles %>%
+    inner_join(plays, by = c("gameId", "playId")) %>%
+    inner_join(pbp22 %>% 
+                 mutate(gameId = as.double(old_game_id), 
+                        playId = as.double(play_id)), 
+               by = c("gameId", "playId")) %>%
+    filter(!is.na(expectedPointsAdded)) %>%
+    mutate(
+      negative_epa = ifelse(expectedPointsAdded < 0, 1, 0)
+    ) %>%
+    group_by(defensiveTeam) %>%
+    summarize(
+      total_negative_epa = sum(negative_epa, na.rm = TRUE),
+      total_plays = n(),
+      avg_DIR = total_negative_epa / total_plays,
+      .groups = "drop"
+    ) %>%
+    arrange(desc(avg_DIR))
+  
+  # Render Average DIR Plot
+  output$avg_dir_plot <- renderPlotly({
+    avg_dir <- ggplot(team_defensive_impact, aes(x = reorder(defensiveTeam, avg_DIR), y = avg_DIR, fill = avg_DIR)) +
+      geom_bar(stat = "identity") +
+      coord_flip() +
+      labs(
+        title = "Average Defensive Impact Rate by Team",
+        x = "Team",
+        y = "Average Defensive Impact Rate (DIR)",
+        fill = "DIR"
+      ) +
+      scale_fill_gradient(low = "blue", high = "red", name = "DIR") +
+      theme_minimal()
+    
+    # Convert to interactive plotly
+    ggplotly(avg_dir, tooltip = c("x", "y", "fill"))
+  })
+  
+  # Defensive Impact Rate by Team (Run vs. Pass)
+  output$run_pass_dir_plot <- renderPlotly({
+    # Set factor levels for defensiveTeam based on the Average DIR order
+    team_defensive_impact_run_pass <- tackles %>%
+      inner_join(plays, by = c("gameId", "playId")) %>%
+      inner_join(pbp22 %>% 
+                   mutate(gameId = as.double(old_game_id), 
+                          playId = as.double(play_id)), 
+                 by = c("gameId", "playId")) %>%
+      filter(!is.na(expectedPointsAdded), play_type != "no_play") %>%
+      mutate(
+        negative_epa = ifelse(expectedPointsAdded < 0, 1, 0)
+      ) %>%
+      group_by(defensiveTeam, play_type) %>%
+      summarize(
+        total_negative_epa = sum(negative_epa, na.rm = TRUE),
+        total_plays = n(),
+        avg_DIR = total_negative_epa / total_plays,
+        .groups = "drop"
+      ) %>%
+      mutate(defensiveTeam = factor(defensiveTeam, levels = team_defensive_impact$defensiveTeam))  # Match factor levels
+    
+    # Create the ggplot
+    run_pass_dir <- ggplot(team_defensive_impact_run_pass, aes(x = defensiveTeam, y = avg_DIR, fill = play_type)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      coord_flip() +
+      labs(
+        title = "Defensive Impact Rate by Team (Run vs. Pass)",
+        x = "Team",
+        y = "Average Defensive Impact Rate (DIR)",
+        fill = "Play Type"
+      ) +
+      theme_minimal()
+    
+    # Convert to interactive plotly
+    ggplotly(run_pass_dir, tooltip = c("x", "y", "fill"))
+  })
+  
+  # Dynamic UI
+  output$dynamic_plot_or_table <- renderUI({
+    req(input$analysis_type)  # Ensure a selection is made
+    
+    if (input$analysis_type == "avg_dir") {
+      plotlyOutput("avg_dir_plot", height = "600px")
+    } else if (input$analysis_type == "run_pass_dir") {
+      plotlyOutput("run_pass_dir_plot", height = "600px")
+    } else if (input$analysis_type == "negative_epa_rate") {
+      fluidRow(
+        column(6, plotlyOutput("negative_epa_rate_plot", height = "600px")),
+        column(6, DTOutput("negative_epa_rate_table"))
+      )
+    }
   })
 }
 
