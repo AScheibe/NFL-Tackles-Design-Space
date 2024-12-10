@@ -1,0 +1,69 @@
+---
+title: "DefensiveBoxPreProcess"
+output: html_document
+date: "2024-12-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+```{r preprocess-data, echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# Load raw data
+data <- read.csv("data/working_data.csv")
+
+# Preprocess bar graph data
+precomputed_bar_data <- data %>%
+  filter(!is.na(expectedPointsAdded) & 
+           !is.na(defensiveTeam) & 
+           !is.na(defendersInTheBox) & 
+           !is.na(playId) & 
+           !is.na(gameId) & 
+           !is.na(passProbability) & 
+           !is.na(dis)) %>%
+  group_by(defendersInTheBox) %>%
+  summarize(
+    avg_pass_prob = mean(passProbability, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Preprocess grouped data
+precomputed_data_grouped <- data %>%
+  filter(!is.na(expectedPointsAdded) & 
+           !is.na(defensiveTeam) & 
+           !is.na(defendersInTheBox) & 
+           !is.na(playId) & 
+           !is.na(gameId) & 
+           !is.na(passProbability) & 
+           !is.na(dis)) %>%
+  group_by(gameId, playId, nflId) %>%
+  summarize(
+    avg_distance = mean(dis, na.rm = TRUE),
+    avg_pass_prob = mean(passProbability, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Save preprocessed data
+saveRDS(precomputed_bar_data, "data/precomputed_bar_data.rds")
+saveRDS(precomputed_data_grouped, "data/precomputed_data_grouped.rds")
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
