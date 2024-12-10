@@ -1,140 +1,150 @@
-library(tidyverse)
 library(shiny)
+library(tidyverse)
 library(plotly)
-library(DT)
-library(bslib)
-library(jpeg)
-library(png)
 
-# Load the necessary data
-data <- read_csv("data/working_data.csv")
-heatmap_data = data %>% select(week, season, displayName, offenseFormation, defensiveTeam, playDescription, ballCarrierDisplayName, x, y, gameId, playId)
+# Load data
+data <- read.csv("data/working_data.csv")
 
-print(heatmap_data)
-# Football field image
-field_image <- readJPEG("football-field.jpg")
-
-# Define field dimensions
-field_length <- 120  # yards including end zones
-field_width <- 53.3  # yards
-
-# Create the heatmap plot with football field dimensions and yard markers
-tackle_heatmap <- ggplot(heatmap_data, aes(x = x, y = y)) +
-  
-  # Add the football field image as background
-  annotation_raster(field_image, xmin = -3, xmax = 123, ymin = 0, ymax = 53.3, interpolate = TRUE) +
-  
-  geom_bin2d(bins = 60, alpha = 0.6) +  
-  scale_fill_gradient(low = "blue", high = "red") +
-  
-  # Set x-axis with center field and end zones
-  scale_x_continuous(breaks = seq(0, 120, by = 10), limits = c(0, 120), expand = c(0, 0),
-                     labels = function(x) ifelse(x == 0 | x == 120, "End Zone", x)) +
-  scale_y_continuous(limits = c(0, field_width), expand = c(0, 0)) +
-  
-  labs(title = "Tackle Position Heatmap on Football Field", x = "Yard Line", y = "Field Width (Yards)") +
-  theme_minimal() +
-  theme(
-    aspect.ratio = field_width / field_length,
-    panel.grid.major = element_blank() # Remove grid lines since we have football field image
+# Filter and group data
+data_grouped <- data %>%
+  filter(!is.na(expectedPointsAdded) & 
+           !is.na(defensiveTeam) & 
+           !is.na(defendersInTheBox) & 
+           !is.na(playId) & 
+           !is.na(gameId) & 
+           !is.na(passProbability) & 
+           !is.na(dis)) %>%
+  group_by(gameId, playId, nflId) %>%
+  summarize(
+    avg_distance = mean(dis, na.rm = TRUE),
+    avg_pass_prob = mean(passProbability, na.rm = TRUE),
   )
 
-# Define UI with bslib 
+
+bar_data <- data %>%
+  filter(!is.na(expectedPointsAdded) & 
+           !is.na(defensiveTeam) & 
+           !is.na(defendersInTheBox) & 
+           !is.na(playId) & 
+           !is.na(gameId) & 
+           !is.na(passProbability) & 
+           !is.na(dis)) %>%
+  group_by(defendersInTheBox) %>%
+  summarize(
+    avg_pass_prob = mean(passProbability, na.rm = TRUE)
+  )
+
+# New grouped data for EPA visualization
+epa_data <- data %>%
+  filter(!is.na(expectedPointsAdded) & 
+           !is.na(defendersInTheBox)) %>%
+  group_by(defendersInTheBox) %>%
+  summarize(
+    avg_epa = mean(expectedPointsAdded, na.rm = TRUE)
+  )
+
+# UI
 ui <- fluidPage(
-  theme = bs_theme(
-    version = 4,
-    bootswatch = "cerulean", # Can change theme if desired
-    primary = "#007bff", # Primary color 
-    font_scale = 1.2
-  ),
-  
-  titlePanel("NFL Tackle Analysis"),
   tabsetPanel(
-    tabPanel("Tackle Heatmap",
-             plotlyOutput("heatmapPlot", width = "70vw", height = "55vh"),
-             DTOutput("heatmapDataTable")
+    # Tab 1: Placeholder for other visualizations
+    tabPanel(
+      "Overview",
+      sidebarLayout(
+        sidebarPanel(
+          helpText("Overview of player performance data.")
+        ),
+        mainPanel(
+          h3("This is the Overview tab. Add content here.")
+        )
+      )
     ),
-    tabPanel("Player Density by Yard Line",
-             sidebarLayout(
-               sidebarPanel(
-                 sliderInput("yardLineRange", "Yard Line Range:", min = 0, max = field_length, value = c(0, field_length))
-               ),
-               mainPanel(
-                 plotlyOutput("densityPlot")
-               )
-             )
-    ),
-    tabPanel("Average Tackle Distance",
-             sidebarLayout(
-               sidebarPanel(
-                 selectInput("playerID", "Select Player:", choices = unique(data$displayName), selected = NULL),
-                 sliderInput("timeRange", "Time Range (Seconds):", min = 0, max = 60, value = c(0, 60))
-               ),
-               mainPanel(
-                 plotlyOutput("distancePlot")
-               )
-             )
+    # Tab 2: Distance vs Pass Probability
+    tabPanel(
+      "Defensive Box Dashboard",
+      sidebarLayout(
+        sidebarPanel(
+          helpText("Hover over the graphs to view metrics.")
+        ),
+        mainPanel(
+          plotlyOutput("smoothedPlot"),
+          plotlyOutput("barGraph"), # Add bar graph output
+          plotlyOutput("epaGraph"), # Add new EPA graph output
+      )
     )
+    ),
   )
 )
 
-# Define server logic
-server <- function(input, output) {
-  # Heatmap Plot
-  output$heatmapPlot <- renderPlotly({
-    ggplotly(tackle_heatmap, source = "heatmap_click")
-  })
-  
-  # Update table based on clicks on heatmap
-  observeEvent(event_data("plotly_click", source = "heatmap_click"), {
-    click_data <- event_data("plotly_click", source = "heatmap_click")
-    if (!is.null(click_data)) {
-      x_clicked <- click_data$x
-      y_clicked <- click_data$y
-      clicked_data <- heatmap_data %>%
-        filter(abs(x - x_clicked) < 1, abs(y - y_clicked) < 1)
-      
-      output$heatmapDataTable <- renderDT({
-        datatable(clicked_data)
-      })
-    }
-  })
-  
-  # Density Plot by Yard Line
-  output$densityPlot <- renderPlotly({
-    filtered_data <- data %>% filter(x >= input$yardLineRange[1], x <= input$yardLineRange[2])
-    density_plot <- ggplot(filtered_data, aes(x = x)) +
-      geom_density(fill = "#006700", alpha = 0.6) +
-      labs(title = "Player Density by Yard Line", x = "Yard Line", y = "Density") +
-      theme_minimal() 
-    ggplotly(density_plot)
-  })
-  
-  
-  # Average Tackle Distance Plot
-  output$distancePlot <- renderPlotly({
-    # Check if the necessary columns are available in the data
-    req("player_id" %in% colnames(data), "time" %in% colnames(data), "distance" %in% colnames(data))
-    
-    # Filter data for the selected player and time range
-    filtered_data <- data %>%
-      filter(displayName == input$playerID, time >= input$timeRange[1], time <= input$timeRange[2])
-    
-    # Check if filtered data is empty and handle it
-    if (nrow(filtered_data) == 0) {
-      showNotification("No data available for the selected player and time range.", type = "warning")
-      return(NULL)
-    }
-    
-    # Create the average tackle distance plot
-    avg_distance_plot <- ggplot(filtered_data, aes(x = time, y = distance)) +
-      geom_line(color = "purple") +
-      labs(title = "Average Tackle Distance Over Time", x = "Time (Seconds)", y = "Distance (Yards)") +
+# Server
+server <- function(input, output, session) {
+  # Smoothed line graph with filled area
+  output$smoothedPlot <- renderPlotly({
+    p <- ggplot(data_grouped, aes(x = avg_distance, y = avg_pass_prob)) +
+      geom_smooth(
+        method = "loess",
+        se = FALSE,
+        color = "black",
+        span = 0.3,
+        size = 1
+      ) + # Smoothed line
+      geom_area(
+        stat = "smooth",
+        method = "loess",
+        fill = "red",
+        span = 0.3,
+        alpha = 0.5
+      ) + # Filled area under smoothed line
+      labs(
+        title = "Player Distance Traveled by Pass Probability",
+        x = "Pass Probability",
+        y = "Avg Distance Traveled"
+      ) +
       theme_minimal()
     
-    ggplotly(avg_distance_plot)
+    ggplotly(p, tooltip = c("x", "y"))
+  })
+  
+  # Bar graph for average players in box and pass probability
+  output$barGraph <- renderPlotly({
+    p <- ggplot(bar_data, aes(x = factor(defendersInTheBox), y = avg_pass_prob)) +
+      geom_col(
+        fill = "orange",
+        alpha = 0.5
+      ) +
+      labs(
+        title = "Pass Probability vs Defenders in Box",
+        x = "Defenders in Box",
+        y = "Average Pass Probability"
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5) # Force labels to be centered under bars
+      )
+    
+    ggplotly(p)
+  })
+  
+  # New EPA graph
+  output$epaGraph <- renderPlotly({
+    p <- ggplot(epa_data, aes(x = factor(defendersInTheBox), y = avg_epa)) +
+      geom_col(
+        fill = "steelblue",
+        alpha = 0.7
+      ) +
+      labs(
+        title = "Expected Points Added (EPA) vs Defenders in Box",
+        x = "Defenders in Box",
+        y = "Average EPA"
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5) # Center x-axis labels
+      )
+    
+    ggplotly(p)
   })
 }
 
-# Run the application
+# Run the app
 shinyApp(ui = ui, server = server)
+
