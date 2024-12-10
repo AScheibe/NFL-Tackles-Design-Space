@@ -1,0 +1,87 @@
+---
+title: "newestAttempt"
+author: "Max Lake"
+date: "2024-12-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(data.table)
+```
+
+```{r}
+games <- fread("nfl-big-data-bowl-2024/games.csv")
+players <- fread("nfl-big-data-bowl-2024/players.csv")
+plays <- fread("nfl-big-data-bowl-2024/plays.csv")
+tackles <- fread("nfl-big-data-bowl-2024/tackles.csv")
+frames <- fread("nfl-big-data-bowl-2024/frames.csv")
+tracking <- lapply(1:9, function(i) fread(paste0("nfl-big-data-bowl-2024/tracking_week_", i, ".csv"))) %>%
+            bind_rows()
+```
+
+```{r}
+# Filter for relevant games
+relevant_game_ids <- c(
+  2022091112, 2022091812, 2022092512, 2022100211, 2022100900,
+  2022101602, 2022102306, 2022103012, 2022110603
+)
+
+# Preprocess tracking data
+tracking <- tracking %>%
+  mutate(
+    x = ifelse(playDirection == "left", 120 - x, x),
+    y = ifelse(playDirection == "left", 160 / 3 - y, y),
+    dir = ifelse(playDirection == "left", dir + 180, dir %% 360),
+    o = ifelse(playDirection == "left", o + 180, o %% 360),
+    dir_rad = pi * (dir / 180),
+    dir_x = ifelse(is.na(dir), NA_real_, sin(dir_rad)),
+    dir_y = ifelse(is.na(dir), NA_real_, cos(dir_rad)),
+    s_x = dir_x * s,
+    s_y = dir_y * s,
+    a_x = dir_x * a,
+    a_y = dir_y * a
+  )
+
+# Process frames data to ensure unique start and end frames
+frames <- frames %>%
+  group_by(gameId, playId) %>%
+  summarise(
+    start_frame = min(start_frame, na.rm = TRUE),
+    end_frame = min(end_frame, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Filter tracking data using frames
+tracking_filtered <- tracking %>%
+  inner_join(frames, by = c("gameId", "playId")) %>%
+  filter(frameId >= start_frame & frameId <= end_frame)
+
+# Preprocess plays and games for GB defense
+gb_games <- games %>%
+  filter(gameId %in% relevant_game_ids)
+
+gb_plays <- plays %>%
+  filter(gameId %in% relevant_game_ids, defensiveTeam == "GB") %>%
+  left_join(gb_games %>% select(gameId, week), by = "gameId")
+
+gb_tracking <- tracking_filtered %>%
+  filter(gameId %in% relevant_game_ids, playId %in% gb_plays$playId) %>%
+  left_join(players, by = "nflId") %>%
+  left_join(
+    gb_plays %>%
+      select(
+        gameId, playId, week, ballCarrierId, ballCarrierDisplayName,
+        playDescription, quarter, down, yardsToGo, possessionTeam,
+        defensiveTeam, gameClock, offenseFormation
+      ),
+    by = c("gameId", "playId")
+  ) %>%
+  rename(displayName = displayName.x)
+
+```
+
