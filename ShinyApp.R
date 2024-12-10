@@ -17,9 +17,8 @@ data_grouped <- data %>%
   group_by(gameId, playId, nflId) %>%
   summarize(
     avg_distance = mean(dis, na.rm = TRUE),
-    avg_pass_prob = mean(passProbability, na.rm = TRUE),
+    avg_pass_prob = mean(passProbability, na.rm = TRUE)
   )
-
 
 bar_data <- data %>%
   filter(!is.na(expectedPointsAdded) & 
@@ -34,7 +33,6 @@ bar_data <- data %>%
     avg_pass_prob = mean(passProbability, na.rm = TRUE)
   )
 
-# New grouped data for EPA visualization
 epa_data <- data %>%
   filter(!is.na(expectedPointsAdded) & 
            !is.na(defendersInTheBox)) %>%
@@ -44,34 +42,36 @@ epa_data <- data %>%
   )
 
 # UI
-ui <- fluidPage(
-  tabsetPanel(
-    # Tab 1: Placeholder for other visualizations
-    tabPanel(
-      "Overview",
-      sidebarLayout(
-        sidebarPanel(
-          helpText("Overview of player performance data.")
-        ),
-        mainPanel(
-          h3("This is the Overview tab. Add content here.")
-        )
-      )
-    ),
-    # Tab 2: Distance vs Pass Probability
-    tabPanel(
-      "Defensive Box Dashboard",
-      sidebarLayout(
-        sidebarPanel(
-          helpText("Hover over the graphs to view metrics.")
-        ),
-        mainPanel(
-          plotlyOutput("smoothedPlot"),
-          plotlyOutput("barGraph"), # Add bar graph output
-          plotlyOutput("epaGraph"), # Add new EPA graph output
+ui <- navbarPage(
+  "Defensive Space",
+  tabPanel(
+    "Overview",
+    sidebarLayout(
+      sidebarPanel(
+        helpText("Explore the overall performance and defensive metrics.")
+      ),
+      mainPanel(
+        h3("Welcome to the Defensive Space Dashboard"),
+        p("Use the tabs above to navigate through different visualizations.")
       )
     )
-    ),
+  ),
+  tabPanel(
+    "Defensive Box Dashboard",
+    sidebarLayout(
+      sidebarPanel(
+        helpText("Explore defensive metrics and their relationships.")
+      ),
+      mainPanel(
+        fluidRow(
+          column(6, plotlyOutput("smoothedPlot")),
+          column(6, plotlyOutput("barGraph"))
+        ),
+        fluidRow(
+          column(12, plotlyOutput("epaGraph"))
+        )
+      )
+    )
   )
 )
 
@@ -86,20 +86,26 @@ server <- function(input, output, session) {
         color = "black",
         span = 0.3,
         size = 1
-      ) + # Smoothed line
+      ) +
       geom_area(
         stat = "smooth",
         method = "loess",
         fill = "red",
         span = 0.3,
         alpha = 0.5
-      ) + # Filled area under smoothed line
+      ) +
       labs(
         title = "Player Distance Traveled by Pass Probability",
-        x = "Pass Probability",
-        y = "Avg Distance Traveled"
+        x = "Average Distance",
+        y = "Pass Probability"
       ) +
-      theme_minimal()
+      theme_minimal() +
+      theme(
+        text = element_text(family = "Arial", color = "#495057"),
+        plot.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14)
+      )
     
     ggplotly(p, tooltip = c("x", "y"))
   })
@@ -118,13 +124,17 @@ server <- function(input, output, session) {
       ) +
       theme_minimal() +
       theme(
-        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5) # Force labels to be centered under bars
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5),
+        text = element_text(family = "Arial", color = "#495057"),
+        plot.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14)
       )
     
     ggplotly(p)
   })
   
-  # New EPA graph
+  # EPA graph
   output$epaGraph <- renderPlotly({
     p <- ggplot(epa_data, aes(x = factor(defendersInTheBox), y = avg_epa)) +
       geom_col(
@@ -138,7 +148,11 @@ server <- function(input, output, session) {
       ) +
       theme_minimal() +
       theme(
-        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5) # Center x-axis labels
+        axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5),
+        text = element_text(family = "Arial", color = "#495057"),
+        plot.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14)
       )
     
     ggplotly(p)
@@ -147,4 +161,3 @@ server <- function(input, output, session) {
 
 # Run the app
 shinyApp(ui = ui, server = server)
-
