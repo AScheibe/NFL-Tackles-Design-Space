@@ -8,8 +8,9 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      selectInput("game", "Select Game:", choices = unique(games$gameId)),
-      uiOutput("play_selector"),  # Dynamic UI for play selection
+      selectInput("week", "Select Week:", choices = sort(unique(games$week))),
+      uiOutput("matchup_selector"),  # Dynamic UI for matchup selection
+      uiOutput("play_selector"),    # Dynamic UI for play selection
       h3("Play Description"),
       verbatimTextOutput("play_description"),
       br(),
@@ -28,18 +29,34 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # Dynamic UI for selecting plays based on selected game
+  # Dynamic UI for selecting matchups based on week
+  output$matchup_selector <- renderUI({
+    req(input$week)
+    matchups_in_week <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr))  # Create matchup string
+    selectInput("matchup", "Select Matchup:", choices = unique(matchups_in_week$matchup))
+  })
+  
+  # Dynamic UI for selecting plays based on selected matchup
   output$play_selector <- renderUI({
-    req(input$game)
-    plays_in_game <- plays %>% filter(gameId == as.numeric(input$game))
+    req(input$week, input$matchup)
+    selected_game <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
+      filter(matchup == input$matchup) %>%
+      pull(gameId)  # Extract the gameId for the selected matchup
+    
+    plays_in_game <- plays %>%
+      filter(gameId == selected_game)
     selectInput("play", "Select Play:", choices = plays_in_game$playId)
   })
   
   # Display play description
   output$play_description <- renderText({
-    req(input$game, input$play)
+    req(input$play)
     play_details <- plays %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play))
+      filter(playId == as.numeric(input$play))
     
     if (nrow(play_details) == 0) return("No play description available.")
     play_details$playDescription
@@ -47,12 +64,17 @@ server <- function(input, output, session) {
   
   # Display useful play metrics
   output$play_metrics <- renderTable({
-    req(input$game, input$play)
+    req(input$week, input$matchup, input$play)
     
-    # Join plays and games to include team abbreviations
+    selected_game <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
+      filter(matchup == input$matchup) %>%
+      pull(gameId)
+    
     play_details <- plays %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play)) %>%
-      left_join(games, by = "gameId")  # Join with games data
+      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
+      left_join(games, by = "gameId")
     
     if (nrow(play_details) == 0) return(NULL)
     
@@ -67,22 +89,29 @@ server <- function(input, output, session) {
         play_details$quarter,
         play_details$down,
         play_details$yardsToGo,
-        gsub("^0+", "", sub(":00$", "", play_details$gameClock))  # Format Game Clock
+        gsub("^0+", "", sub(":00$", "", play_details$gameClock))
       )
     )
   }, rownames = FALSE)
   
-  # Render Interactive Play Visualization
+  # Replace references to input$game with selected_game
   output$interactive_play <- renderPlotly({
-    req(input$game, input$play)
+    req(input$week, input$matchup, input$play)
+    
+    # Determine the selected game based on week and matchup
+    selected_game <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
+      filter(matchup == input$matchup) %>%
+      pull(gameId)
     
     # Filter tracking data for the selected play
     play_tracking <- tracking %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play))
+      filter(gameId == selected_game, playId == as.numeric(input$play))
     
     # Get play details for line of scrimmage and yards to go
     play_details <- plays %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play)) %>%
+      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
       select(absoluteYardlineNumber, yardsToGo)
     
     if (nrow(play_details) == 0) return(NULL)
@@ -92,7 +121,7 @@ server <- function(input, output, session) {
     
     # Adjust for plays moving left
     play_direction <- tracking %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play)) %>%
+      filter(gameId == as.numeric(selected_game), playId == as.numeric(input$play)) %>%
       slice(1) %>%
       pull(playDirection)
     
@@ -108,8 +137,9 @@ server <- function(input, output, session) {
     line_of_scrimmage <- pmax(10, pmin(line_of_scrimmage, 110))
     first_down_marker <- pmax(10, pmin(first_down_marker, 110))
     
+    # Prepare tracking data for visualization
     player_tracking <- play_tracking %>%
-      filter(!is.na(nflId)) %>%  # Players have nflId
+      filter(!is.na(nflId)) %>%
       left_join(plays %>% select(gameId, playId, possessionTeam, defensiveTeam), by = c("gameId", "playId")) %>%
       mutate(
         role = case_when(
@@ -122,26 +152,18 @@ server <- function(input, output, session) {
           role == "Offense" ~ "blue",
           TRUE ~ "gray"
         ),
-        team = club  # Add team for tooltips
+        team = club
       )
     
     ball_tracking <- play_tracking %>%
-      filter(is.na(nflId)) %>%  # Ball has no nflId
-      mutate(role = "Ball", color = "black", team = "Ball")  # Include team as "Ball"
+      filter(is.na(nflId)) %>%
+      mutate(role = "Ball", color = "black", team = "Ball")
     
     # Combine data
     combined_data <- bind_rows(
       player_tracking %>% select(frameId, x, y, displayName, role, color, team, time),
       ball_tracking %>% select(frameId, x, y, displayName, role, color, team, time)
     )
-    
-    combined_data <- combined_data %>%
-      mutate(
-        time = case_when(
-          !is.na(time) & grepl("^\\d{2}:\\d{2}:\\d{2}$", time) ~ format(hms(time), "%M:%S"),  # Properly formatted time
-          TRUE ~ NA_character_  # Set invalid or missing times to NA
-        )
-      )
     
     # Define field layout with the blue and yellow lines
     field_shapes <- list(
@@ -178,13 +200,13 @@ server <- function(input, output, session) {
       type = "scatter",
       mode = "markers",
       marker = list(size = 8, opacity = 0.8),
-      color = ~color,  
+      color = ~color,
       colors = c("black", "blue", "red"),
-      text = ~paste("Name:", displayName, "<br>Role:", role, "<br>Team:", team),  # Include team
+      text = ~paste("Name:", displayName, "<br>Role:", role, "<br>Team:", team),
       hoverinfo = "text"
     ) %>%
       layout(
-        title = paste("Interactive Visualization - Game ID:", input$game, "| Play ID:", input$play),
+        title = paste("Game ID:", selected_game, "| Play ID:", input$play),
         xaxis = list(title = "Field Length (yards)", range = c(0, 120)),
         yaxis = list(title = "Field Width (yards)", range = c(0, 53.3)),
         plot_bgcolor = "darkgreen",
@@ -195,16 +217,21 @@ server <- function(input, output, session) {
       animation_opts(frame = 100, transition = 0, redraw = FALSE)
   })
   
-  
   # Render Additional Play Details Table
   output$play_table <- renderDataTable({
-    req(input$game, input$play)
+    req(input$week, input$matchup, input$play)
+    
+    selected_game <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
+      filter(matchup == input$matchup) %>%
+      pull(gameId)
+    
     play_details <- plays %>%
-      filter(gameId == as.numeric(input$game), playId == as.numeric(input$play))
+      filter(gameId == selected_game, playId == as.numeric(input$play))
     
     if (nrow(play_details) == 0) return(NULL)
     
-    # Combine relevant data
     play_details %>%
       select(playDescription, possessionTeam, defensiveTeam, preSnapHomeScore, preSnapVisitorScore,
              quarter, down, yardsToGo, gameClock, ballCarrierDisplayName, playResult, offenseFormation, defendersInTheBox) %>%
