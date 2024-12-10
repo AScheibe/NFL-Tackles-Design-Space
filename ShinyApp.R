@@ -57,6 +57,17 @@ ui <- navbarPage(
     )
   ),
   tabPanel(
+    "Play Visualization",
+    sidebarLayout(
+      sidebarPanel(
+        helpText("View and analyze frame by frame play data.")
+      ),
+      mainPanel(
+        #TODO: MAX ADD CONTENT
+      )
+    )
+  ),
+  tabPanel(
     "Defensive Box Dashboard",
     sidebarLayout(
       sidebarPanel(
