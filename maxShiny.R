@@ -1,11 +1,10 @@
 library(shiny)
+library(tidyverse)
 library(plotly)
-library(dplyr)
 library(lubridate)
+library(here)
+library(nflreadr)
 library(DT)
-library(ggplot2)
-
-data <- read.csv("data/working_data.csv")
 
 games <- readRDS("data/games.rds")
 plays <- readRDS("data/plays.rds")
@@ -18,249 +17,228 @@ pbp22 <- readRDS("data/pbp22.rds")
 rb_bc_plays <- readRDS("data/rb_bc_plays.rds")
 runs <- readRDS("data/runs.rds")
 
-ui <- fluidPage(
-  navbarPage(
-    "NFL Play Analysis",
-    tabPanel(
-      "Interactive NFL Play Animation",
-      sidebarLayout(
-        sidebarPanel(
-          selectInput("week", "Select Week:", choices = sort(unique(games$week))),
-          uiOutput("matchup_selector"),  # Dynamic UI for matchup selection
-          uiOutput("defensive_team_selector"),  # New dynamic UI for defensive team selection
-          uiOutput("quarter_selector"),  # New dynamic UI for quarter selection
-          uiOutput("play_selector"),    # Dynamic UI for play selection
-          h3("Play Description"),
-          verbatimTextOutput("play_description"),
-          br(),
-          h3("Play Metrics"),
-          tableOutput("play_metrics")
-        ),
-        mainPanel(
-          plotlyOutput("interactive_play", height = "600px"),
-          br(),
-          h3("Additional Play Details"),
-          dataTableOutput("play_table")
-        )
+# Summarize data for plotting, grouping only by player
+rb_summary_all <- rb_bc_plays %>%
+  left_join(plays %>% select(gameId, playId, playResult, possessionTeam, defensiveTeam), 
+            by = c("gameId", "playId")) %>%
+  group_by(ballCarrierDisplayName, possessionTeam, gameId, playId) %>%  # Group by unique plays
+  summarize(
+    total_run_plays = n_distinct(playId),  # Count unique play IDs
+    avg_yards_gained = mean(playResult, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(ballCarrierDisplayName, possessionTeam) %>%  # Group to summarize per player
+  summarize(
+    total_run_plays = sum(total_run_plays),
+    avg_yards_gained = mean(avg_yards_gained, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Team colors
+team_colors_main <- c("ARI" = "#97233F", "ATL" = "#a71930", "BAL" = "#241773", "BUF" = "#00338D", "CAR" = "#0085CA",
+                      "CHI" = "#0B162A", "CIN" = "#fb4f14", "CLE" = "#311D00", "DAL" = "#869397", "DEN" = "#FB4F14",
+                      "DET" = "#0076b6", "GB" = "#203731", "HOU" = "#03202f", "IND" = "#002C5F", "JAX" = "#006778", 
+                      "KC" = "#E31837", "LAC" = "#0080C6", "LA" = "#003594", "MIA" = "#008E97", "MIN" = "#4F2683", 
+                      "NE" = "#002244", "NO" = "#D3BC8D", "NYG" = "#0B2265", "NYJ" = "#125740", "LV" = "#000000", 
+                      "PHI" = "#004C54", "PIT" = "#FFB612", "SF" = "#AA0000", "SEA" = "#002244", "TB" = "#D50A0A", 
+                      "TEN" = "#0C2340", "WAS" = "#5A1414")
+
+team_colors_outer <- c("ARI" = "#FFB612", "ATL" = "#000000", "BAL" = "#000000", "BUF" = "#C60C30", "CAR" = "#101820",
+                       "CHI" = "#c83803", "CIN" = "#000000", "CLE" = "#ff3c00", "DAL" = "#003594", "DEN" = "#002244",
+                       "DET" = "#B0B7BC", "GB" = "#FFB612", "HOU" = "#A71930", "IND" = "#A2AAAD", "JAX" = "#9F792C", 
+                       "KC" = "#FFB81C", "LAC" = "#FFC20E", "LA" = "#ffa300", "MIA" = "#FC4C02", "MIN" = "#FFC62F", 
+                       "NE" = "#C60C30", "NO" = "#101820", "NYG" = "#a71930", "NYJ" = "#000000", "LV" = "#A5ACAF", 
+                       "PHI" = "#A5ACAF", "PIT" = "#101820", "SF" = "#B3995D", "SEA" = "#69BE28", "TB" = "#34302B", 
+                       "TEN" = "#4B92DB", "WAS" = "#FFB612")
+
+# Join rb_bc_plays with plays to bring in necessary columns
+rb_data <- rb_bc_plays %>%
+  left_join(
+    plays %>% 
+      select(gameId, playId, expectedPointsAdded, defendersInTheBox, playResult, offenseFormation, defensiveTeam), 
+    by = c("gameId", "playId")
+  ) %>%
+  left_join(
+    tracking %>% 
+      select(gameId, playId, nflId, dis), 
+    by = c("gameId", "playId")
+  ) %>%
+  filter(
+    !is.na(expectedPointsAdded),
+    !is.na(defendersInTheBox),
+    !is.na(dis)
+  )
+
+# UI
+ui <- navbarPage(
+  "Defensive Space - RB Run Analysis",
+  tabPanel(
+    "Play Visualization",
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("week", "Select Week:", choices = sort(unique(games$week))),
+        uiOutput("matchup_selector"),  # Dynamic UI for matchup selection
+        uiOutput("defensive_team_selector"),  # Dynamic UI for defensive team selection
+        uiOutput("quarter_selector"),  # Dynamic UI for quarter selection
+        uiOutput("play_selector"),    # Dynamic UI for play selection
+        h3("Play Description"),
+        verbatimTextOutput("play_description"),  # Only one description section
+        br(),
+        h3("Play Metrics"),
+        tableOutput("play_metrics")  # Only one play_metrics table
+      ),
+      mainPanel(
+        plotlyOutput("interactive_play", height = "600px"),
+        br(),
+        h3("Defender Pressure Analysis"),  # Main play details, separate from metrics
+        plotlyOutput("defender_pressure_plot", height = "400px")  # Use this for additional detailed data if needed
       )
-    ),
-    tabPanel(
-      "Defense Analysis",
-      sidebarLayout(
-        sidebarPanel(
-          helpText("Explore defensive metrics and their relationships.")
+    )
+  ),
+  tabPanel(
+    "RB Performance",
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("team", "Select Team (RB's Team):", 
+                    choices = c("All", sort(unique(rb_summary_all$possessionTeam))), 
+                    selected = "All"),
+        selectInput("player", "Select Running Back:", choices = NULL, 
+                    multiple = TRUE, selectize = TRUE),
+        selectInput("opponent", "Select Opponent Team:", 
+                    choices = c("All", sort(unique(plays$defensiveTeam))), 
+                    selected = "All"),
+        selectInput("formation", "Select Offensive Formation:", 
+                    choices = c("All", sort(unique(rb_data$offenseFormation))), 
+                    selected = "All"),
+        selectInput("defenders", "Select Defenders in the Box:", 
+                    choices = c("All", sort(unique(rb_data$defendersInTheBox))), 
+                    selected = "All"),
+        actionButton("add_player", "Add Selected Players"),
+        br(), br(),
+        actionButton("reset_button", "Reset Selections", icon = icon("Redo"))
+      ),
+      mainPanel(
+        plotlyOutput("rb_performance_plot"),
+        br(),
+        DTOutput("rb_summary_table")
+      )
+    )
+  ),
+  tabPanel(
+    "Defensive Box Dashboard",
+    sidebarLayout(
+      sidebarPanel(
+        helpText("Explore defensive metrics specifically for RB run plays."),
+        selectInput(
+          "team_selection", "Select Team:",
+          choices = c("All", sort(unique(plays$defensiveTeam))),
+          selected = "All"
+        )
+      ),
+      mainPanel(
+        fluidRow(
+          column(6, plotlyOutput("epaGraph")),
+          column(6, plotlyOutput("barGraph"))
         ),
-        mainPanel(
-          h3("Negative EPA Rate (Faceted by Offensive Formation)"),
-          plotlyOutput("negative_epa_rate_plot", height = "800px"),  # Render faceted plotly chart
-          br(),
-          h3("Negative EPA Rate Data"),
-          DTOutput("negative_epa_rate_table")  # Data table output
+        fluidRow(
+          column(12, plotlyOutput("negative_epa_rate_plot")),
+          column(12, plotlyOutput("tackling_success_plot"))
         )
       )
     )
   )
 )
 
+# Server
 server <- function(input, output, session) {
-  
-  # Negative EPA Rate Calculation
-  negative_epa_rate <- plays %>%
-    mutate(negative_epa = ifelse(expectedPointsAdded < 0, 1, 0)) %>%
-    group_by(defendersInTheBox, offenseFormation) %>%
-    summarize(
-      success_rate = mean(negative_epa, na.rm = TRUE),
-      total_plays = n(),
-      .groups = "drop"
-    ) %>%
-    filter(offenseFormation != "NA" & !is.na(defendersInTheBox)) %>% # Filter out NAs
-    mutate(
-      defendersInTheBox = factor(defendersInTheBox, levels = sort(unique(defendersInTheBox))),
-      offenseFormation = factor(offenseFormation, levels = sort(unique(offenseFormation)))
-    )
-  
-  # Create a list of `plotly` plots for each offensive formation
-  formation_plots <- negative_epa_rate %>%
-    split(.$offenseFormation) %>%
-    lapply(function(data) {
-      plot_ly(
-        data,
-        x = ~defendersInTheBox,
-        y = ~success_rate,
-        type = "bar",
-        name = unique(data$offenseFormation),  # Use formation name for the trace
-        hoverinfo = "text",  # Ensure text only shows in hover
-        text = ~paste(
-          "Defenders in Box:", defendersInTheBox, "<br>",
-          "Offensive Formation:", offenseFormation, "<br>",
-          "Success Rate:", round(success_rate * 100, 1), "%", "<br>",
-          "Total Plays:", total_plays
-        )
-      ) %>%
-        layout(
-          xaxis = list(
-            title = "Defenders in the Box",
-            tickmode = "array",  # Ensure all values are represented
-            tickvals = sort(unique(as.numeric(data$defendersInTheBox)))  # Explicit tick values
-          ),
-          yaxis = list(
-            title = "Success Rate (Negative EPA)",
-            tickformat = ".0%"  # Format y-axis as percentage
-          ),
-          showlegend = FALSE  # Hide individual legends for clarity
-        )
-    })
-  
-  # Combine the individual formation plots into a single faceted layout
-  output$negative_epa_rate_plot <- renderPlotly({
-    subplot(
-      formation_plots,
-      nrows = 2,  # Adjust the number of rows based on the number of formations
-      titleX = TRUE,
-      titleY = TRUE,
-      shareX = TRUE,
-      shareY = TRUE
-    ) %>%
-      layout(
-        title = "Success Rate (Negative EPA) by Defenders in Box and Offensive Formation",
-        margin = list(t = 50),
-        showlegend = TRUE  # Show a combined legend
-      )
-  })
-  
-  # Render Data Table for Success Rate
-  output$negative_epa_rate_table <- renderDT({
-    negative_epa_rate %>%
-      arrange(offenseFormation, defendersInTheBox) %>%  # Sort by offensive formation and defenders in box
-      datatable(
-        options = list(pageLength = 10, scrollX = TRUE),  # Paginated and scrollable table
-        rownames = FALSE,
-        caption = htmltools::tags$caption(
-          style = "caption-side: top; text-align: left; font-size: 16px;",
-          "Data Table: Success Rate and Total Plays by Defenders in Box and Offensive Formation"
-        )
-      )
-  })
-  
+
   # Dynamic UI for selecting matchups based on week
   output$matchup_selector <- renderUI({
     req(input$week)
     matchups_in_week <- games %>%
       filter(week == input$week) %>%
-      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr))  # Create matchup string
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr))
     selectInput("matchup", "Select Matchup:", choices = unique(matchups_in_week$matchup))
   })
   
-  # New dynamic UI for selecting the defensive team
+  # Dynamic UI for defensive team
   output$defensive_team_selector <- renderUI({
     req(input$matchup)
-    teams <- strsplit(input$matchup, " vs ")[[1]]  # Split matchup into home and away teams
+    teams <- strsplit(input$matchup, " vs ")[[1]]
     selectInput("defensive_team", "Select Defensive Team:", choices = teams)
   })
   
-  # Quarter selection
+  # Dynamic UI for quarters
   output$quarter_selector <- renderUI({
     req(input$matchup, input$defensive_team)
-    
-    # Filter selected game
     selected_game <- games %>%
-      filter(week == input$week) %>%
-      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
-      filter(matchup == input$matchup) %>%
+      filter(week == input$week, paste(homeTeamAbbr, "vs", visitorTeamAbbr) == input$matchup) %>%
       pull(gameId)
-    
-    # Filter plays for the selected game and defensive team
     available_quarters <- plays %>%
       filter(gameId == selected_game, defensiveTeam == input$defensive_team) %>%
       pull(quarter) %>%
-      unique() %>%
-      sort()
-    
-    selectInput("quarter", "Select Quarter:", choices = c("All", available_quarters))
+      unique()
+    selectInput("quarter", "Select Quarter:", choices = c("All", sort(available_quarters)))
   })
   
-  # Dynamic UI for selecting plays based on the selected matchup and defensive team
+  # Dynamic UI for plays
   output$play_selector <- renderUI({
-    req(input$matchup, input$defensive_team)
-    
-    # Filter selected game
+    req(input$matchup, input$defensive_team, input$quarter)
     selected_game <- games %>%
-      filter(week == input$week) %>%
-      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
-      filter(matchup == input$matchup) %>%
+      filter(week == input$week, paste(homeTeamAbbr, "vs", visitorTeamAbbr) == input$matchup) %>%
       pull(gameId)
-    
-    # Filter plays in the game and defensive team
-    plays_in_game <- plays %>%
+    filtered_plays <- plays %>%
       filter(gameId == selected_game, defensiveTeam == input$defensive_team)
-    
-    # Apply quarter filter if selected
-    if (!is.null(input$quarter) && input$quarter != "All") {
-      plays_in_game <- plays_in_game %>%
-        filter(quarter == as.numeric(input$quarter))
+    if (input$quarter != "All") {
+      filtered_plays <- filtered_plays %>% filter(quarter == as.numeric(input$quarter))
     }
-    
-    # Sort plays by game clock
-    plays_in_game <- plays_in_game %>%
-      arrange(desc(as.numeric(gameClock))) 
-    
-    selectInput("play", "Select Play:", choices = plays_in_game$playId)
+    selectInput("play", "Select Play:", choices = filtered_plays$playId)
   })
   
   # Display play description
   output$play_description <- renderText({
-    req(input$play, input$matchup)
-    
-    # Determine the selected game
-    selected_game <- games %>%
-      filter(week == input$week) %>%
-      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
-      filter(matchup == input$matchup) %>%
-      pull(gameId)
-    
-    # Filter play details using both gameId and playId
+    req(input$play)
     play_details <- plays %>%
-      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
-      distinct(playDescription)
-    
-    if (nrow(play_details) == 0) return("No play description available.")
-    
-    play_details$playDescription[1]
+      filter(playId == as.numeric(input$play)) %>%
+      pull(playDescription)
+    if (length(play_details) == 0) return("No description available.")
+    play_details
   })
   
-  # Display useful play metrics
+  # Display play metrics
   output$play_metrics <- renderTable({
-    req(input$week, input$matchup, input$play)
-    
-    selected_game <- games %>%
-      filter(week == input$week) %>%
-      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
-      filter(matchup == input$matchup) %>%
-      pull(gameId)
+    req(input$play)
     
     play_details <- plays %>%
-      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
-      left_join(games, by = "gameId")
+      filter(playId == as.numeric(input$play)) %>%
+      distinct(playId, .keep_all = TRUE) %>%  # Ensure only unique rows
+      select(
+        possessionTeam, defensiveTeam, preSnapHomeScore, preSnapVisitorScore,
+        ballCarrierDisplayName, quarter, down, yardsToGo, gameClock, offensiveFormation, defendersInTheBox, playResult
+      )
     
     if (nrow(play_details) == 0) return(NULL)
     
     data.frame(
       Metric = c("Offensive Team", "Defensive Team", "Score", "Ball Carrier", 
-                 "Quarter", "Down", "Yards to Go", "Game Clock"),
+                 "Quarter", "Down", "Yards to Go", "Game Clock", "Offensive Formation", "Number of Defenders in the Box",
+                 "Play Result"),
       Value = c(
         play_details$possessionTeam,
         play_details$defensiveTeam,
-        paste(play_details$homeTeamAbbr, play_details$preSnapHomeScore, "-", play_details$visitorTeamAbbr, play_details$preSnapVisitorScore),
+        paste(play_details$preSnapHomeScore, "-", play_details$preSnapVisitorScore),
         play_details$ballCarrierDisplayName,
         play_details$quarter,
         play_details$down,
         play_details$yardsToGo,
-        gsub("^0+", "", sub(":00$", "", play_details$gameClock))
+        gsub("^0+", "", sub(":00$", "", play_details$gameClock)),
+        play_details$offensiveFormation,
+        play_details$defendersInTheBox,
+        play_details$playResult
       )
     )
-  }, rownames = FALSE)
+  })
   
-  # Replace references to input$game with selected_game
   output$interactive_play <- renderPlotly({
     req(input$week, input$matchup, input$play)
     
@@ -371,7 +349,7 @@ server <- function(input, output, session) {
     )
     
     # Add yard lines
-    yard_lines <- lapply(seq(10, 110, by = 10), function(x) {
+    yard_lines <- lapply(seq(20, 100, by = 10), function(x) {
       list(type = "line", x0 = x, x1 = x, y0 = 0, y1 = 53.3, line = list(color = "white", width = 1, dash = "dash"))
     })
     field_shapes <- c(field_shapes, yard_lines)
@@ -409,8 +387,8 @@ server <- function(input, output, session) {
       animation_opts(frame = 100, transition = 0, redraw = FALSE)
   })
   
-  # Render Additional Play Details Table
-  output$play_table <- renderDataTable({
+  # Display play description
+  output$play_description <- renderText({
     req(input$week, input$matchup, input$play)
     
     selected_game <- games %>%
@@ -420,28 +398,382 @@ server <- function(input, output, session) {
       pull(gameId)
     
     play_details <- plays %>%
-      filter(gameId == selected_game, playId == as.numeric(input$play))
+      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
+      pull(playDescription)
+    if (length(play_details) == 0) return("No description available.")
+    play_details
+  })
+  
+  # Display play metrics
+  output$play_metrics <- renderTable({
+    req(input$week, input$matchup, input$play, input$quarter)
+    
+    selected_game <- games %>%
+      filter(week == input$week) %>%
+      mutate(matchup = paste(homeTeamAbbr, "vs", visitorTeamAbbr)) %>%
+      filter(matchup == input$matchup) %>%
+      pull(gameId)
+    
+    play_details <- plays %>%
+      filter(gameId == selected_game, playId == as.numeric(input$play)) %>%
+      {if (input$quarter != "All") filter(., quarter == as.numeric(input$quarter)) else .} %>%
+      distinct(playId, .keep_all = TRUE) %>%  # Ensure unique rows
+      select(
+        possessionTeam, defensiveTeam, preSnapHomeScore, preSnapVisitorScore,
+        ballCarrierDisplayName, quarter, down, yardsToGo, gameClock
+      )
     
     if (nrow(play_details) == 0) return(NULL)
     
-    play_details %>%
-      select(playDescription, possessionTeam, defensiveTeam, preSnapHomeScore, preSnapVisitorScore,
-             quarter, down, yardsToGo, gameClock, ballCarrierDisplayName, playResult, offenseFormation, defendersInTheBox) %>%
-      rename(
-        "Play Description" = playDescription,
-        "Offensive Team" = possessionTeam,
-        "Defensive Team" = defensiveTeam,
-        "Home Score" = preSnapHomeScore,
-        "Visitor Score" = preSnapVisitorScore,
-        "Quarter" = quarter,
-        "Down" = down,
-        "Yards to Go" = yardsToGo,
-        "Game Clock" = gameClock,
-        "Ball Carrier" = ballCarrierDisplayName,
-        "Yards Gained" = playResult,
-        "Offensive Formation" = offenseFormation,
-        "Number of Defenders in the Box" = defendersInTheBox
+    data.frame(
+      Metric = c("Offensive Team", "Defensive Team", "Score", "Ball Carrier", 
+                 "Quarter", "Down", "Yards to Go", "Game Clock"),
+      Value = c(
+        play_details$possessionTeam,
+        play_details$defensiveTeam,
+        paste(play_details$preSnapHomeScore, "-", play_details$preSnapVisitorScore),
+        play_details$ballCarrierDisplayName,
+        play_details$quarter,
+        play_details$down,
+        play_details$yardsToGo,
+        gsub("^0+", "", sub(":00$", "", play_details$gameClock))
       )
+    )
+  })
+  
+  
+  # Reactive data for filtering players by team
+  filtered_players <- reactive({
+    rb_data_filtered <- rb_bc_plays %>%
+      left_join(plays %>% 
+                  select(gameId, playId, playResult, possessionTeam, defensiveTeam, 
+                         offenseFormation, defendersInTheBox), 
+                by = c("gameId", "playId")) %>%
+      group_by(ballCarrierDisplayName, possessionTeam, defensiveTeam, gameId, playId, 
+               offenseFormation, defendersInTheBox) %>%
+      summarize(
+        total_run_plays = n_distinct(playId),  # Count unique runs
+        avg_yards_gained = mean(playResult, na.rm = TRUE),
+        .groups = "drop"
+      )
+    
+    print(colnames(rb_data_filtered))
+    
+    # Apply filters
+    if (input$team != "All") {
+      rb_data_filtered <- rb_data_filtered %>% filter(possessionTeam == input$team)
+    }
+    if (input$opponent != "All") {
+      rb_data_filtered <- rb_data_filtered %>% filter(defensiveTeam == input$opponent)
+    }
+    if (input$formation != "All") {
+      rb_data_filtered <- rb_data_filtered %>% filter(offenseFormation == input$formation)
+    }
+    if (input$defenders != "All") {
+      rb_data_filtered <- rb_data_filtered %>% filter(defendersInTheBox == as.numeric(input$defenders))
+    }
+    
+    return(rb_data_filtered %>% 
+             group_by(ballCarrierDisplayName, possessionTeam) %>% 
+             summarize(
+               total_run_plays = sum(total_run_plays),
+               avg_yards_gained = mean(avg_yards_gained, na.rm = TRUE),
+               .groups = "drop"
+             ))
+    
+  })
+  
+  # Update player selector based on team
+  observe({
+    available_players <- sort(unique(filtered_players()$ballCarrierDisplayName))
+    updateSelectInput(session, "player", choices = available_players)
+  })
+  
+  # ReactiveValues to store selected players
+  selected_players <- reactiveValues(list = character(0))
+  
+  observeEvent(input$add_player, {
+    req(input$player)  # Ensure input$player is not NULL
+    selected_players$list <- unique(c(selected_players$list, input$player))
+    print(selected_players$list)  # Debugging: Print list to the console
+  })
+  
+  # Reactive value for clicked player
+  clicked_player <- reactiveVal(NULL)
+  
+  # Update reactive value on plot click
+  observeEvent(event_data("plotly_click", source = "rb_plot"), {
+    click_info <- event_data("plotly_click", source = "rb_plot")
+    if (!is.null(click_info)) {
+      clicked_player(click_info$key)  # Use the player name as a key
+    }
+  })
+  
+  observeEvent(input$reset_button, {
+    selected_players$list <- character(0)
+    clicked_player(NULL)
+    
+    updateSelectInput(session, "team", selected = "All")
+    updateSelectInput(session, "opponent", selected = "All")
+    updateSelectInput(session, "formation", selected = "All")
+    updateSelectInput(session, "defenders", selected = "All")
+    updateSelectInput(session, "player", choices = NULL, selected = NULL)
+  })
+  
+  
+  # Update the player performance scatter plot
+  output$rb_performance_plot <- renderPlotly({
+    rb_data <- filtered_players()
+    
+    # Filter data based on selected players and clicked player
+    if (length(selected_players$list) > 0) {
+      rb_data <- rb_data %>% filter(ballCarrierDisplayName %in% selected_players$list)
+    } else if (!is.null(clicked_player())) {
+      rb_data <- rb_data %>% filter(ballCarrierDisplayName == clicked_player())
+    }
+    
+    # Add dynamic colors
+    rb_data <- rb_data %>%
+      mutate(
+        fill_color = team_colors_main[possessionTeam],
+        outline_color = team_colors_outer[possessionTeam]
+      )
+    
+    # Render Plotly scatter plot
+    plot_ly(
+      data = rb_data,
+      x = ~total_run_plays,
+      y = ~avg_yards_gained,
+      text = ~paste(
+        "Player:", ballCarrierDisplayName,
+        "<br>Team:", possessionTeam,
+        "<br>Total Runs:", total_run_plays,
+        "<br>Avg Yards:", round(avg_yards_gained, 2)
+      ),
+      hoverinfo = "text",
+      marker = list(
+        color = ~fill_color,
+        line = list(color = ~outline_color, width = 2),
+        size = 10
+      )
+    ) %>%
+      layout(
+        title = "RB Performance: Total Runs vs Average Yards Gained",
+        xaxis = list(title = "Total Run Plays"),
+        yaxis = list(title = "Average Yards Gained")
+      )
+  })
+  
+  # Update the summary table based on clicked player
+  output$rb_summary_table <- renderDT({
+    data <- filtered_players()
+    
+    print(colnames(data))
+    
+    # Apply selected players filter
+    if (length(selected_players$list) > 0) {
+      data <- data %>% filter(ballCarrierDisplayName %in% selected_players$list)
+    } else if (!is.null(clicked_player())) {
+      data <- data %>% filter(ballCarrierDisplayName == clicked_player())
+    }
+    
+    # Render the datatable
+    datatable(
+      data %>% 
+        select(
+          ballCarrierDisplayName, possessionTeam, total_run_plays, avg_yards_gained) %>%
+        arrange(desc(total_run_plays)),
+      options = list(pageLength = 10, autoWidth = TRUE),
+      rownames = FALSE
+    )
+  })
+  
+  epa_data <- rb_data %>%
+    group_by(defensiveTeam, defendersInTheBox) %>%
+    summarize(
+      avg_epa = mean(expectedPointsAdded, na.rm = TRUE),
+      total_plays = n(),
+      .groups = "drop"
+    )
+  
+  filtered_epa_data <- reactive({
+    if (input$team_selection == "All") {
+      epa_data %>%
+        group_by(defendersInTheBox) %>%
+        summarize(
+          avg_epa = mean(avg_epa, na.rm = TRUE),
+          total_plays = sum(total_plays),
+          .groups = "drop"
+        )
+    } else {
+      epa_data %>%
+        filter(defensiveTeam == input$team_selection)
+    }
+  })
+  
+  # EPA graph
+  output$epaGraph <- renderPlotly({
+    p <- ggplot(filtered_epa_data(), aes(x = factor(defendersInTheBox), y = avg_epa)) +
+      geom_col(fill = "steelblue", alpha = 0.7) +
+      labs(
+        title = "Average EPA vs Defenders in Box (RB Run Plays)",
+        x = "Number of Defenders in the Box",
+        y = "Average EPA"
+      ) +
+      theme_minimal()
+    ggplotly(p)
+  })
+  
+  # Precompute Negative EPA Rate
+  negative_epa_rate <- rb_data %>%
+    mutate(negative_epa = ifelse(expectedPointsAdded < 0, 1, 0)) %>%
+    group_by(defensiveTeam, defendersInTheBox, offenseFormation) %>%
+    summarize(
+      success_rate = mean(negative_epa, na.rm = TRUE),  # Proportion of negative EPA
+      total_plays = n(),
+      .groups = "drop"
+    )
+  
+  # Reactive Filter for Negative EPA
+  filtered_negative_epa <- reactive({
+    if (input$team_selection == "All") {
+      negative_epa_rate
+    } else {
+      negative_epa_rate %>% filter(defensiveTeam == input$team_selection)
+    }
+  })
+  
+  # Negative EPA Rate Plot by Offensive Formation
+  output$negative_epa_rate_plot <- renderPlotly({
+    p <- ggplot(filtered_negative_epa(), aes(x = factor(defendersInTheBox), y = success_rate, fill = offenseFormation)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      scale_y_continuous(labels = scales::percent) +
+      labs(
+        title = "Negative EPA Rate by Defenders in Box and Formation",
+        x = "Number of Defenders in the Box",
+        y = "Negative EPA Rate",
+        fill = "Offensive Formation"
+      ) +
+      theme_minimal()
+    ggplotly(p)
+  })
+  
+  
+  tracking_closest_defenders <- reactive({
+    req(input$play)  # Ensure a play is selected
+    
+    # Filter tracking data for the selected play
+    play_tracking <- tracking %>%
+      filter(playId == as.numeric(input$play))
+    
+    # Get ball carrier details
+    play_details <- plays %>%
+      filter(playId == as.numeric(input$play)) %>%
+      slice(1)
+    
+    ball_carrier_id <- play_details$ballCarrierId
+    defensive_team <- play_details$defensiveTeam
+    
+    # Validate that a ball carrier exists
+    if (is.na(ball_carrier_id)) stop("No ball carrier ID found for the selected play.")
+    
+    # Get ball carrier positions
+    ball_carrier <- play_tracking %>%
+      filter(nflId == ball_carrier_id) %>%
+      select(frameId, x, y)
+    
+    # Get defenders' positions
+    defenders <- play_tracking %>%
+      filter(club == defensive_team, !is.na(nflId)) %>%
+      select(frameId, nflId, x, y, displayName)
+    
+    # Calculate distances between ball carrier and each defender
+    closest_defenders <- ball_carrier %>%
+      left_join(defenders, by = "frameId") %>%
+      mutate(distance = sqrt((x.x - x.y)^2 + (y.x - y.y)^2)) %>%
+      group_by(frameId) %>%
+      slice_min(order_by = distance, n = 3) %>%  # Select the 3 closest defenders
+      ungroup()
+    
+    return(closest_defenders)
+  })
+  
+  output$defender_pressure_plot <- renderPlotly({
+    req(tracking_closest_defenders())
+    
+    closest_defenders <- tracking_closest_defenders()
+    
+    p <- ggplot(closest_defenders, aes(x = frameId, y = distance, color = displayName)) +
+      geom_line(size = 1) +
+      labs(
+        title = "Defender Distance to Ball Carrier (RB Run Plays)",
+        x = "Frame ID",
+        y = "Distance (yards)",
+        color = "Defender"
+      ) +
+      theme_minimal()
+    
+    ggplotly(p)
+  })
+  
+  output$defensive_summary_table <- renderDT({
+    epa_data %>%
+      arrange(avg_epa) %>%
+      datatable(
+        options = list(pageLength = 10, scrollX = TRUE),
+        caption = htmltools::tags$caption(
+          "Table: Average EPA and Total Plays by Defenders in the Box"
+        )
+      )
+  })
+  
+  
+  pbp22_clean <- pbp22 %>%
+    mutate(
+      gameId = as.double(old_game_id),  # Match games format
+      playId = as.double(play_id)       # Match plays format
+    )
+  
+  # Join pbp22 with plays to add defendersInTheBox
+  pbp22_rb <- pbp22_clean %>%
+    inner_join(
+      plays %>% select(gameId, playId, defendersInTheBox, offenseFormation, defensiveTeam), 
+      by = c("gameId", "playId")
+    ) %>%
+    inner_join(rb_bc_plays, by = c("gameId", "playId"))  # Focus on RB ball carriers
+  
+  # Precompute Tackling Success Rates
+  tackle_success <- pbp22_rb %>%
+    group_by(defensiveTeam, defendersInTheBox, offenseFormation) %>%
+    summarize(
+      total_tackles = sum(solo_tackle, na.rm = TRUE) + sum(assist_tackle, na.rm = TRUE),
+      solo_tackles = sum(solo_tackle, na.rm = TRUE),
+      tackle_success_rate = ifelse(total_tackles > 0, solo_tackles / total_tackles, NA),
+      .groups = "drop"
+    )
+  
+  # Reactive Filter for Tackling Success
+  filtered_tackle_success <- reactive({
+    if (input$team_selection == "All") {
+      tackle_success
+    } else {
+      tackle_success %>% filter(defensiveTeam == input$team_selection)
+    }
+  })
+  
+  # Plot the tackle success rates
+  output$tackling_success_plot <- renderPlotly({
+    p <- ggplot(filtered_tackle_success(), aes(x = factor(defendersInTheBox), y = tackle_success_rate, fill = offenseFormation)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      scale_y_continuous(labels = scales::percent) +
+      labs(
+        title = "Tackling Success Rate by Defenders in Box and Offensive Formation",
+        x = "Number of Defenders in the Box",
+        y = "Tackle Success Rate",
+        fill = "Offensive Formation"
+      ) +
+      theme_minimal()
+    ggplotly(p)
   })
 }
 
