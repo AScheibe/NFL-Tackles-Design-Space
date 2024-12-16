@@ -88,6 +88,9 @@ ui <- navbarPage(
         tableOutput("play_metrics")  # Only one play_metrics table
       ),
       mainPanel(
+        h3("Welcome to the Defensive Space Dashboard!"),
+        p("Please use the  tabs above to navigate through different visualizations."),
+        HTML("<b>Authors:</b> Max Lake, Alexander Scheibe, Yoel Nasi Kazado, Urmi Mehta, Joseph Ho, Miguel Marcial"),
         plotlyOutput("interactive_play", height = "600px"),
         br(),
         h3("Defender Pressure Analysis"),  # Main play details, separate from metrics
@@ -118,6 +121,10 @@ ui <- navbarPage(
         actionButton("reset_button", "Reset Selections", icon = icon("Redo"))
       ),
       mainPanel(
+        p("This scatter plot shows the performance of running backs (RBs) based on their total number of run plays (x-axis) 
+        and average yards gained per play (y-axis). Use the filters on the left to select specific teams, players, opponents, 
+        formations, and defenders in the box. Hover over the points to view detailed player stats. Players with a higher 
+        average yards gained and more total plays are generally more efficient."),
         plotlyOutput("rb_performance_plot"),
         br(),
         DTOutput("rb_summary_table")
@@ -137,12 +144,19 @@ ui <- navbarPage(
       ),
       mainPanel(
         fluidRow(
-          column(6, plotlyOutput("epaGraph")),
-          column(6, plotlyOutput("barGraph"))
+          column(12, p("This chart shows the average Expected Points Added (EPA) for running back plays based on the 
+                       number of defenders in the box. Lower EPA indicates stronger defensive performance.")),
+          column(6, plotlyOutput("epaGraph"))
         ),
         fluidRow(
-          column(12, plotlyOutput("negative_epa_rate_plot")),
-          column(12, plotlyOutput("tackling_success_plot"))
+          column(12, p("This chart displays the percentage of plays resulting in negative EPA, grouped by offensive 
+                       formation and defenders in the box. A higher rate indicates more defensive success.")),
+          column(6, plotlyOutput("negative_epa_rate_plot"))
+        ),
+        fluidRow(
+          column(12, p("This graph shows the tackling success rate, calculated as solo tackles divided by total tackles, 
+                       based on defensive alignment and offensive formation.")),
+          column(6, plotlyOutput("tackling_success_plot"))
         )
       )
     )
@@ -457,8 +471,6 @@ server <- function(input, output, session) {
         .groups = "drop"
       )
     
-    print(colnames(rb_data_filtered))
-    
     # Apply filters
     if (input$team != "All") {
       rb_data_filtered <- rb_data_filtered %>% filter(possessionTeam == input$team)
@@ -495,7 +507,6 @@ server <- function(input, output, session) {
   observeEvent(input$add_player, {
     req(input$player)  # Ensure input$player is not NULL
     selected_players$list <- unique(c(selected_players$list, input$player))
-    print(selected_players$list)  # Debugging: Print list to the console
   })
   
   # Reactive value for clicked player
@@ -568,14 +579,19 @@ server <- function(input, output, session) {
   output$rb_summary_table <- renderDT({
     data <- filtered_players()
     
-    print(colnames(data))
-    
     # Apply selected players filter
     if (length(selected_players$list) > 0) {
       data <- data %>% filter(ballCarrierDisplayName %in% selected_players$list)
     } else if (!is.null(clicked_player())) {
       data <- data %>% filter(ballCarrierDisplayName == clicked_player())
     }
+    
+    # Round numeric values to 3 significant figures
+    data <- data %>%
+      mutate(
+        total_run_plays = signif(total_run_plays, 3),
+        avg_yards_gained = signif(avg_yards_gained, 3)
+      )
     
     # Render the datatable
     datatable(
@@ -637,7 +653,13 @@ server <- function(input, output, session) {
   # Reactive Filter for Negative EPA
   filtered_negative_epa <- reactive({
     if (input$team_selection == "All") {
-      negative_epa_rate
+      negative_epa_rate %>%
+        group_by(defendersInTheBox, offenseFormation) %>%
+        summarize(
+          success_rate = sum(success_rate * total_plays, na.rm = TRUE) / sum(total_plays),  # Weighted average
+          total_plays = sum(total_plays),
+          .groups = "drop"
+        )
     } else {
       negative_epa_rate %>% filter(defensiveTeam == input$team_selection)
     }
@@ -661,15 +683,16 @@ server <- function(input, output, session) {
   
   tracking_closest_defenders <- reactive({
     req(input$play)  # Ensure a play is selected
-    
-    # Filter tracking data for the selected play
-    play_tracking <- tracking %>%
-      filter(playId == as.numeric(input$play))
+  
     
     # Get ball carrier details
     play_details <- plays %>%
       filter(playId == as.numeric(input$play)) %>%
       slice(1)
+    
+    # Filter tracking data for the selected play
+    play_tracking <- tracking %>%
+      filter(playId == as.numeric(input$play), gameId == as.numeric(play_details$gameId))
     
     ball_carrier_id <- play_details$ballCarrierId
     defensive_team <- play_details$defensiveTeam
@@ -689,10 +712,10 @@ server <- function(input, output, session) {
     
     # Calculate distances between ball carrier and each defender
     closest_defenders <- ball_carrier %>%
-      left_join(defenders, by = "frameId") %>%
+      inner_join(defenders, by = "frameId") %>%
       mutate(distance = sqrt((x.x - x.y)^2 + (y.x - y.y)^2)) %>%
       group_by(frameId) %>%
-      slice_min(order_by = distance, n = 3) %>%  # Select the 3 closest defenders
+      slice_min(order_by = distance, n = 3) %>%
       ungroup()
     
     return(closest_defenders)
@@ -755,7 +778,14 @@ server <- function(input, output, session) {
   # Reactive Filter for Tackling Success
   filtered_tackle_success <- reactive({
     if (input$team_selection == "All") {
-      tackle_success
+      tackle_success %>%
+        group_by(defendersInTheBox, offenseFormation) %>%
+        summarize(
+          total_tackles = sum(total_tackles),
+          solo_tackles = sum(solo_tackles),
+          tackle_success_rate = ifelse(total_tackles > 0, solo_tackles / total_tackles, NA),
+          .groups = "drop"
+        )
     } else {
       tackle_success %>% filter(defensiveTeam == input$team_selection)
     }
