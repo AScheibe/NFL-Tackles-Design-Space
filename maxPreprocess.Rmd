@@ -1,10 +1,3 @@
----
-title: "maxPreprocess"
-author: "Max Lake"
-date: "2024-12-09"
-output: html_document
----
-
 ```{r}
 library(tidyverse)
 library(here)
@@ -59,7 +52,9 @@ runs <- pbp22 %>%
   distinct(gameId = as.double(old_game_id), 
            playId = as.double(play_id))
 
+# Focuses on plays where Running Backs are the Ball Carriers
 rb_bc_plays <- plays %>% 
+  semi_join(runs, by = c("gameId", "playId")) %>% 
   left_join(select(players, nflId, position), by = c("ballCarrierId" = "nflId")) %>% 
   filter(position == "RB") %>% 
   select(gameId, playId, ballCarrierDisplayName, position)
@@ -88,7 +83,7 @@ start_event <- tracking %>%
   slice_min(frameId) %>% 
   distinct(gameId, playId, start_frame = frameId)
 
-frames <- start_event  %>%  
+frames <- start_event  %>%
   full_join(end_event)
 ```
 
@@ -97,8 +92,26 @@ tracking_runs <- tracking %>%
   inner_join(frames) %>% 
   filter(frameId >= start_frame, frameId <= end_frame) %>% 
   left_join(select(players, nflId, weight)) %>% 
-  mutate(m_x = s_x * weight,
-         m_y = s_y * weight)
+  mutate(m_x = s_x * weight, m_y = s_y * weight)
+```
+
+```{r}
+# Filter datasets to include only RB ball carrier run plays 
+
+games <- games %>%
+  semi_join(rb_bc_plays, by = "gameId")  # Filter games by gameId only
+
+plays <- plays %>%
+  semi_join(runs, by = c("gameId", "playId")) %>%
+  semi_join(rb_bc_plays, by = c("gameId", "playId"))  # Filter plays by both gameId and playId
+
+tracking <- tracking %>%
+  semi_join(runs, by = c("gameId", "playId")) %>%
+  semi_join(rb_bc_plays, by = c("gameId", "playId"))  # Filter tracking data by both gameId and playId
+
+tracking_runs <- tracking_runs %>%
+  semi_join(runs, by = c("gameId", "playId")) %>%
+  semi_join(rb_bc_plays, by = c("gameId", "playId"))  # Filter tracking runs data 
 ```
 
 ```{r}
